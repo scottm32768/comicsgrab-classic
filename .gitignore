@@ -1,0 +1,18 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# ComicsGrab runtime cache
+cache/
+*.pickle
+
+# Patch/reject/backup artifacts
+*.orig
+*.rej
+
+# Local comic selection/config
+strips.def
+
+# More python bits
+.venv/
+.ruff_cache/

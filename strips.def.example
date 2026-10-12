@@ -1,0 +1,89 @@
+# Comics Grabber by Tom Parker <palfrey@tevp.net>
+# http://tevp.net
+#
+# Comics definition file (derived from the strips.def at
+# http://dailystrips.sf.net, mostly from the file provided with 1.0.26)
+#
+# Released under the GPL Version 2 (http://www.gnu.org/copyleft/gpl.html)
+
+
+# Small example configuration for the ComicsGrab Python 3 fork.
+# Copy this file to strips.def and customize your local copy.
+# See strips-def-readme.txt for the definition-file format.
+#
+# More historical examples from the original ComicsGrab repository:
+#   https://github.com/palfrey/comicsgrab/blob/ebe10facf32f0af730820bf3186ad9e80019ac8d/strips.def
+# This predates the upstream split into separate definition files.
+# Many old URLs are obsolete; use that collection as a format reference.
+# These definitions are taken from the supplied configuration; they have
+# not been retested against the live sites here. Sites may change.
+
+config
+	must subbeg subend
+	may days
+end
+
+group examples
+	desc Example Comics
+	include sluggy fauxpas megatokyo-new
+end
+
+# Search example: the captured image URL is already a full URL.
+strip sluggy
+	name Sluggy Freelance
+	homepage https://sluggy.com
+	type search
+	searchpage $homepage
+	searchpattern <img.src="(https://static.sluggy.com/comics/.*.png)"
+end
+
+# Numbered example: prefer the large image, with an optional fallback.
+# Adjust start to the strip number at which you want retrieval to begin.
+strip fauxpas
+	name Faux Pas
+	type numbered
+	homepage https://www.ozfoxes.com/fauxpas.htm
+	imageurl https://www.ozfoxes.com/fp/fp-%dlg.jpg
+	fallbackurl https://www.ozfoxes.net/fp/fp-%d.jpg
+	start 3214
+end
+
+# Search example: baseurl supplies the prefix for a relative image URL.
+strip megatokyo-new
+	name MegaTokyo
+	homepage https://megatokyo.com/
+	type search
+	searchpattern <img.+?src="(strips\/\d+\.(?:gif|jpg|png))"
+	baseurl $homepage
+end
+
+# GoComics class example, adapted from the supplied configuration.
+# GoComics lists Calvin and Hobbes and Peanuts at these strip slugs:
+# https://www.gocomics.com/calvinandhobbes
+# https://www.gocomics.com/peanuts
+# The live pages returned HTTP 403 during verification, so the inherited
+# searchpattern is not confirmed against current markup. Test locally.
+# $strip is the short name from each strip declaration. The class supplies
+# the shared homepage template and searchpattern; each strip supplies its name.
+# The pattern captures a full image URL, so this class needs no baseurl.
+class gocomics-srch
+	homepage https://www.gocomics.com/$strip/
+	type search
+	searchpattern data-testid\\":\\"main-comic-viewer\\".*?\\"comic\\":\{\\"aspectRatio\\":[0-9.]+,\\"url\\":\\"(https://featureassets\.gocomics\.com/assets/[^\\"]+)
+end
+
+strip calvinandhobbes
+	name Calvin and Hobbes
+	useclass gocomics-srch
+end
+
+strip peanuts
+	name Peanuts
+	useclass gocomics-srch
+end
+
+# Separate group so the unverified network examples can be tried on their own.
+group network-examples
+	desc GoComics Class Examples
+	include calvinandhobbes peanuts
+end
