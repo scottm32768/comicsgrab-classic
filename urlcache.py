@@ -76,16 +76,18 @@ def get_url_with_requests(url, ref=None, proxy="", timeout=120):
             "https": proxy,
         }
 
-    response = requests.get(
-        url,
-        headers=headers,
-        proxies=proxies,
-        timeout=timeout,
-        allow_redirects=True,
-        verify=True,
-    )
-
-    if response.status_code == 403:
+    print(f"GET  {url}", flush=True)
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            proxies=proxies,
+            timeout=timeout,
+            allow_redirects=True,
+            verify=True,
+        )
+    except requests.exceptions.ConnectionError:
+        print(f"GET  {url} via curl after connection error", flush=True)
         return get_url_with_curl(url, ref=ref, timeout=timeout)
 
     response.raise_for_status()
@@ -108,6 +110,7 @@ def url_exists(url, ref=None, proxy="", timeout=120):
         proxies = {"http": proxy, "https": proxy}
 
     try:
+        print(f"HEAD {url}", flush=True)
         response = requests.head(
             url,
             headers=headers,
@@ -116,6 +119,9 @@ def url_exists(url, ref=None, proxy="", timeout=120):
             allow_redirects=True,
             verify=True,
         )
+    except requests.exceptions.ConnectionError:
+        print(f"HEAD {url} via curl after connection error", flush=True)
+        return url_exists_with_curl(url, ref=ref, timeout=timeout)
     except requests.RequestException as err:
         raise URLTimeoutError(str(err))
 
