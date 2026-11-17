@@ -1,11 +1,19 @@
-#!/usr/bin/python
-# Comics Grabber by Tom Parker <palfrey@bits.bris.ac.uk>
+#!/usr/bin/env python3
+#
+# ComicsGrab Classic
+# Originally written by Tom Parker <palfrey@bits.bris.ac.uk>
 # http://www.bits.bris.ac.uk/palfrey/
 #
-# URL Caching class
-# Caches retrieved URLs, with some comic-optimised sections
+# Maintained by Scott McDermott
+# https://github.com/scottm32768/comicsgrab-classic
 #
-# Released under the GPL Version 2 (http://www.gnu.org/copyleft/gpl.html)
+# URL caching and HTTP retrieval
+# - Caches retrieved URLs with comic-specific optimizations
+# - Uses requests for standard HTTP retrieval
+# - Falls back to curl_cffi for HTTP 403 and connection failures
+#
+# Released under the GNU General Public License, version 2 (GPL-2.0)
+#
 
 import os, hashlib
 from pickle import dump, load
@@ -13,7 +21,8 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from URLTimeoutCommon import URLTimeoutError
-import subprocess
+from curl_cffi import requests as curl_requests
+from curl_cffi.requests import RequestsError as CurlRequestsError
 
 try:
     import requests
@@ -55,149 +64,76 @@ class RequestsResponseAdapter:
         return RequestsInfoAdapter(self.response.headers.get("content-type", ""))
 
 
-def get_url_with_requests(url, ref=None, proxy="", timeout=120):
+def _http_request(method, url, ref=None, proxy="", timeout=120):
+    """Request a URL, using curl_cffi if requests is blocked or disconnects."""
     if requests is None:
         raise URLTimeoutError("The requests module is required for HTTPS support")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,image/apng,*/*;q=0.8"
+        ),
         "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
     }
-
     if ref is not None:
         headers["Referer"] = ref
 
-    proxies = None
-    if proxy:
-        proxies = {
-            "http": proxy,
-            "https": proxy,
-        }
+    proxies = {"http": proxy, "https": proxy} if proxy else None
 
-    print(f"GET  {url}", flush=True)
     try:
-        response = requests.get(
-            url,
-            headers=headers,
-            proxies=proxies,
-            timeout=timeout,
-            allow_redirects=True,
-            verify=True,
+        response = requests.request(
+            method, url, headers=headers, proxies=proxies,
+            timeout=timeout, allow_redirects=True, verify=True,
         )
-    except requests.exceptions.ConnectionError:
-        print(f"GET  {url} via curl after connection error", flush=True)
-        return get_url_with_curl(url, ref=ref, timeout=timeout)
+        if response.status_code != 403:
+            response.raise_for_status()
+            return response
+        reason = "HTTP 403"
+    except (requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout) as err:
+        reason = type(err).__name__
 
-    response.raise_for_status()
+    print(f"{method} {url}: curl_cffi fallback ({reason})", flush=True)
+
+    # curl_cffi provides the matching browser User-Agent and other headers.
+    fallback_headers = {"Referer": ref} if ref is not None else {}
+    try:
+        response = curl_requests.request(
+            method, url, headers=fallback_headers, proxy=proxy or None,
+            impersonate="chrome", timeout=timeout,
+            allow_redirects=True, verify=True,
+        )
+    except CurlRequestsError as err:
+        raise requests.exceptions.ConnectionError(
+            f"curl_cffi failed for {url}: {err}"
+        ) from err
+
+    if response.status_code >= 400:
+        raise requests.exceptions.HTTPError(
+            f"{response.status_code} Client Error for url: {url}",
+            response=response,
+        )
+    return response
+
+
+def get_url_with_requests(url, ref=None, proxy="", timeout=120):
+    response = _http_request("GET", url, ref=ref, proxy=proxy, timeout=timeout)
     return RequestsResponseAdapter(response)
 
 
 def url_exists(url, ref=None, proxy="", timeout=120):
-    if requests is None:
-        raise URLTimeoutError("The requests module is required for HTTPS support")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    }
-
-    if ref is not None:
-        headers["Referer"] = ref
-
-    proxies = None
-    if proxy:
-        proxies = {"http": proxy, "https": proxy}
-
     try:
-        print(f"HEAD {url}", flush=True)
-        response = requests.head(
-            url,
-            headers=headers,
-            proxies=proxies,
-            timeout=timeout,
-            allow_redirects=True,
-            verify=True,
-        )
-    except requests.exceptions.ConnectionError:
-        print(f"HEAD {url} via curl after connection error", flush=True)
-        return url_exists_with_curl(url, ref=ref, timeout=timeout)
-    except requests.RequestException as err:
-        raise URLTimeoutError(str(err))
-
-    if response.status_code == 403:
-        return url_exists_with_curl(url, ref=ref, timeout=timeout)
-
-    if response.status_code == 404:
-        return False
-
-    response.raise_for_status()
-    return True
-
-
-def url_exists_with_curl(url, ref=None, timeout=120):
-    cmd = [
-        "curl",
-        "-I",
-        "-L",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        str(timeout),
-        "-o",
-        "/dev/null",
-        "-w",
-        "%{http_code}",
-    ]
-
-    if ref is not None:
-        cmd.extend(["-e", ref])
-
-    cmd.append(url)
-
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = p.communicate()
-
-    if p.returncode != 0:
-        raise URLTimeoutError("curl failed: " + err.decode("utf-8", errors="replace"))
-
-    try:
-        status = int(out.decode("ascii"))
-    except ValueError:
-        raise URLTimeoutError("curl returned invalid HTTP status while checking " + url)
-
-    if status == 404:
-        return False
-
-    if 200 <= status < 300:
+        _http_request("HEAD", url, ref=ref, proxy=proxy, timeout=timeout)
         return True
-
-    raise URLTimeoutError("HTTP status %d while checking %s" % (status, url))
-
-
-def get_url_with_curl(url, ref=None, timeout=120):
-    cmd = [
-        "curl",
-        "-L",
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--max-time",
-        str(timeout),
-    ]
-
-    if ref is not None:
-        cmd.extend(["-e", ref])
-
-    cmd.append(url)
-
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = p.communicate()
-
-    if p.returncode != 0:
-        raise URLTimeoutError("curl failed: " + err.decode("utf-8", errors="replace"))
-
-    return CurlResponseAdapter(out)
+    except requests.exceptions.HTTPError as err:
+        if err.response is not None and err.response.status_code == 404:
+            return False
+        raise
 
 
 class URLCache:
@@ -375,33 +311,4 @@ class URLData:
         self.status = URLCache.STAT_START
 
 
-class CurlInfoAdapter:
-    def __init__(self, content):
-        c = content.lstrip()
-        if c.startswith(b"<"):
-            self.mime = ("text", "html")
-        elif c.startswith(b"\xff\xd8"):
-            self.mime = ("image", "jpeg")
-        elif c.startswith(b"\x89PNG"):
-            self.mime = ("image", "png")
-        elif c.startswith(b"GIF87a") or c.startswith(b"GIF89a"):
-            self.mime = ("image", "gif")
-        else:
-            self.mime = ("", "")
 
-    def getmaintype(self):
-        return self.mime[0]
-
-    def getsubtype(self):
-        return self.mime[1]
-
-
-class CurlResponseAdapter:
-    def __init__(self, content):
-        self.content = content
-
-    def read(self):
-        return self.content
-
-    def info(self):
-        return CurlInfoAdapter(self.content)
